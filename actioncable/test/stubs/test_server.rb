@@ -1,5 +1,34 @@
 # frozen_string_literal: true
 
+require "delegate"
+require "concurrent/atomic/atomic_fixnum"
+
+# Runs tasks on Concurrent.global_io_executor and counts the ones that haven't
+# finished, so wait_for_async knows when the test server's work is done.
+class TestExecutor < SimpleDelegator
+  PENDING = Concurrent::AtomicFixnum.new
+
+  def self.idle? = PENDING.value.zero?
+
+  def initialize
+    super(Concurrent.global_io_executor)
+  end
+
+  def post(*args, &task)
+    PENDING.increment
+    __getobj__.post(*args) do |*task_args|
+      task.call(*task_args)
+    ensure
+      PENDING.decrement
+    end
+  rescue Concurrent::RejectedExecutionError
+    PENDING.decrement
+    raise
+  end
+
+  def <<(task) = post(&task)
+end
+
 class TestServer < ActionCable::Server::Base
   class FakeConfiguration < ActionCable::Server::Configuration
     attr_accessor :subscription_adapter, :log_tags, :filter_parameters, :connection_class
@@ -34,13 +63,13 @@ class TestServer < ActionCable::Server::Base
 
   def executor
     @executor ||= ActionCable::Server::ThreadedExecutor.new.tap do |ex|
-      ex.instance_variable_set(:@executor, Concurrent.global_io_executor)
+      ex.instance_variable_set(:@executor, TestExecutor.new)
     end
   end
 
   def worker_pool
     @worker_pool ||= ActionCable::Server::Worker.new(max_size: 5).tap do |wp|
-      wp.instance_variable_set(:@executor, Concurrent.global_io_executor)
+      wp.instance_variable_set(:@executor, TestExecutor.new)
     end
   end
 

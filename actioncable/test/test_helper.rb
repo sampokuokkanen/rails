@@ -19,7 +19,7 @@ class ActionCable::TestCase < ActiveSupport::TestCase
   include ActiveSupport::Testing::MethodCallAssertions
 
   def wait_for_async
-    wait_for_executor Concurrent.global_io_executor
+    wait_for(message: "Executor could not complete all tasks", timeout: 2) { TestExecutor.idle? }
   end
 
   def run_in_eventmachine
